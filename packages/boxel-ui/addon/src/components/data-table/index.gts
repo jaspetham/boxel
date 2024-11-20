@@ -14,73 +14,99 @@ export interface DataTableHeader {
 export interface DataTableCell {
   [key: string]: string
 };
-
-export interface DataTableType {
-  dataTableHeader: DataTableHeader[],
-  dataTableCell: DataTableCell[]
-}
-
 interface Signature {
   Args: {
-    data: DataTableType
+    tableHeaders: DataTableHeader[],
+    tableCells: DataTableCell[],
+    onDataChange: (updatedHeaders: DataTableHeader[], updatedCells: DataTableCell[]) => void;
   };
   Element: HTMLElement
 }
-type cellData = {
+type headerDataType = {
+  id: string
+  value: string
+  headerIndex: number
+}
+type cellDataType = {
   id: string
   value: string
   parent: string
   cellIndex: number
   headerIndex: number
 }
+
+type editMode = {
+  headerInput : boolean,
+  cellInput: Boolean
+}
+
 export default class DataTable extends Component<Signature> {
   // track the props so i can make it mutable
-  @tracked dataTableHeader = [...this.args.data.dataTableHeader];
-  @tracked dataTableCell = [...this.args.data.dataTableCell];
+  @tracked dataTableHeaders = [...this.args.tableHeaders];
+  @tracked dataTableCells = [...this.args.tableCells];
   @tracked editedCell: { cellIndex: number; headerIndex: number } | null = null;
+  @tracked editedHeader: number | null = null;
   @tracked editedValue: string = '';
+  @tracked editInputMode: editMode = {
+    headerInput:false,
+    cellInput: false
+  };
   @tracked errorMessage: string | null = null;
 
   @action
   validateData(): boolean {
-    if (!Array.isArray(this.dataTableCell)) {
-      this.errorMessage = 'Data should be an array.';
+    if (!Array.isArray(this.dataTableHeaders)) {
+      this.errorMessage = 'Data Headers should be an array.';
+      return false;
+    }
+    if (!Array.isArray(this.dataTableCells)) {
+      this.errorMessage = 'Data Cells should be an array.';
       return false;
     }
 
-    // make sure that the header and cell is matching and show any missing value
-    const expectedKeys = this.dataTableHeader.map(header => header.value);
-    for (const row of this.dataTableCell) {
-      const rowKeys = Object.keys(row);
-      if (!expectedKeys.every(key => rowKeys.includes(key))) {
-        this.errorMessage = `Table Header is missing some expected Table Cell. Expected Table Cell: ${expectedKeys.join(', ')}.`;
+    const expectedKeys = this.dataTableHeaders.map(header => header.value);
+    for (const cell of this.dataTableCells) {
+      const cellKeys = Object.keys(cell);
+      if (!expectedKeys.every(key => cellKeys.includes(key))) {
+        this.errorMessage = `Table Data is missing some expected Table Cell. Expected Table Cell: ${expectedKeys.join(', ')}.`;
+        return false;
+      }
+
+      const extraKeys = cellKeys.filter(key => !expectedKeys.includes(key));
+      if (extraKeys.length > 0) {
+        this.errorMessage = `Table Cells has unexpected keys: ${extraKeys.join(', ')}.`;
         return false;
       }
     }
+
     this.errorMessage = null;
     return true;
   }
 
   constructor(owner: unknown, args: any) {
     super(owner, args);
-    if (!this.validateData()) {
-      console.error(this.errorMessage);
-    }
-  }
-
-  // validate again after any data has been updated
-  @action
-  updateData(newData: DataTableCell[]): void {
-    this.dataTableCell = newData;
-    if (!this.validateData()) {
-      console.error(this.errorMessage);
-    }
+    if (!this.validateData()) console.error(this.errorMessage);
   }
 
   @action
-  onCellClick(cellData: cellData): void {
+  onCellClick(cellData: cellDataType): void {
+    this.editInputMode = {
+      headerInput: false,
+      cellInput: true
+    };
+
     this.editedCell = { cellIndex: cellData.cellIndex, headerIndex: cellData.headerIndex };
     this.editedValue = cellData.value;
+  }
+  @action
+  onHeaderClick(headerData: headerDataType): void {
+    this.editInputMode = {
+      headerInput: true,
+      cellInput: false
+    };
+
+    this.editedHeader = headerData.headerIndex;
+    this.editedValue = headerData.value;
   }
 
   @action
@@ -95,23 +121,61 @@ export default class DataTable extends Component<Signature> {
   @action
   saveEditedValue(): void {
     next(() => {
+      // only if the edited header has any number more than/equal 0 cause of index and not null
+      if(this.editedHeader !== null && this.editedHeader >= 0){
+        const header = this.dataTableHeaders[this.editedHeader];
+        if(header){
+          // store old header value & name for later
+          const oldHeaderValue = header.value;
+          const editedValueCamelCase = this.editedValue
+            .trim()
+            .toLowerCase()
+            .split(' ')
+            .map((word, index) =>
+              index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
+            )
+            .join('');
+          // check if the new header name or camel case value is duplicated
+          const duplicateHeader = this.dataTableHeaders.some(
+            (header) => header.value === editedValueCamelCase || header.name === this.editedValue
+          );
+
+          if (duplicateHeader) {
+            this.errorMessage = 'You cannot have a duplicate Header!';
+            return;
+          }
+          set(header, 'name', this.editedValue)
+          set(header, 'value', editedValueCamelCase)
+
+          // once new header value is updated with the new camel case
+          // it is time to update our cell's key with the new header value
+          this.dataTableCells = this.dataTableCells.map((cell) => {
+            // do a temp copy then return with the new updated cell
+            const updatedCell = { ...cell };
+            // if updatedCell[oldHeaderValue] is either undefined null , return empty
+            updatedCell[editedValueCamelCase] = updatedCell[oldHeaderValue] ?? '';
+            delete updatedCell[oldHeaderValue];
+            return updatedCell;
+          });
+        }
+      }
+
       if (this.editedCell) {
         const { cellIndex, headerIndex } = this.editedCell;
-        const header = this.dataTableHeader[headerIndex];
-        const cell = this.dataTableCell[cellIndex];
-
-        // use set to modify the value via ember reactivity
+        const header = this.dataTableHeaders[headerIndex];
+        const cell = this.dataTableCells[cellIndex];
         if(cell && header){
           set(cell, header.value, this.editedValue)
         }
-
-        // even if there's no new set value, just update the new value accordingly
-        this.dataTableHeader = [...this.dataTableHeader];
-        this.dataTableCell = [...this.dataTableCell];
-        this.editedCell = null;
-        this.editedValue = '';
-        this.updateData(this.dataTableCell)
       }
+
+      this.dataTableHeaders = [...this.dataTableHeaders];
+      this.dataTableCells = [...this.dataTableCells];
+      this.editedHeader = null;
+      this.editedCell = null;
+      this.editedValue = '';
+      if (!this.validateData()) console.error(this.errorMessage);
+       this.args.onDataChange?.(this.dataTableHeaders, this.dataTableCells);
     })
   }
 
@@ -119,7 +183,13 @@ export default class DataTable extends Component<Signature> {
   cancelEdit(): void {
     next(() => {
       this.editedCell = null;
+      this.editedHeader = null;
       this.editedValue = '';
+      this.editInputMode = {
+        headerInput: false,
+        cellInput: false
+      };
+
     })
   }
 
@@ -138,28 +208,48 @@ export default class DataTable extends Component<Signature> {
       <table>
         <thead>
           <tr>
-            {{#each this.dataTableHeader as |header headerIndex|}}
-              <th id={{concat 'header-' headerIndex}}>{{header.name}}</th>
+            {{#each this.dataTableHeaders as |header headerIndex|}}
+              <th
+                id={{concat 'header-' headerIndex}}
+                data-value={{ header.value}}
+                {{on "click" (fn this.onHeaderClick (hash
+                  id=(concat 'header-' headerIndex)
+                  headerIndex=headerIndex
+                  value=header.value
+                ))}}>
+                {{#if (and this.editInputMode.headerInput (eq headerIndex this.editedHeader))}}
+                    <input
+                      type="text"
+                      value={{header.name}}
+                      {{on "input" this.updateEditedValue}}
+                      {{on "keydown" this.handleKeyDown}}
+                      {{on "blur" this.cancelEdit}}
+                    />
+                  {{else}}
+                    <span>{{header.name}}</span>
+                  {{/if}}
+
+              </th>
             {{/each}}
           </tr>
         </thead>
         <tbody>
-          {{#each this.dataTableCell as |cell cellIndex|}}
+          {{#each this.dataTableCells as |cell cellIndex|}}
             <tr>
-              {{#each this.dataTableHeader as |header headerIndex|}}
+              {{#each this.dataTableHeaders as |header headerIndex|}}
                 <td
-                  id={{concat 'cell-' cellIndex '-header-' headerIndex}}
+                  id={{concat 'header-' headerIndex '-cell-' cellIndex }}
                   data-value={{get cell header.value}}
                   data-parent={{header.value}}
                   {{on "click" (fn this.onCellClick (hash
-                    id=(concat 'cell-' cellIndex '-header-' headerIndex)
+                    id=(concat 'header-' headerIndex '-cell-' cellIndex)
                     value=(get cell header.value)
                     parent=header.value
                     cellIndex=cellIndex
                     headerIndex=headerIndex
                   ))}}
                 >
-                  {{#if (and (eq cellIndex this.editedCell.cellIndex) (eq headerIndex this.editedCell.headerIndex))}}
+                  {{#if (and this.editInputMode.cellInput (eq cellIndex this.editedCell.cellIndex) (eq headerIndex this.editedCell.headerIndex))}}
                     <input
                       type="text"
                       value={{get cell header.value}}
