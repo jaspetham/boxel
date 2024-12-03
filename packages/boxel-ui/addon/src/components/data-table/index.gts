@@ -144,13 +144,19 @@ export default class DataTable extends Component<Signature> {
   @action
   saveEditedValue(): void {
     next(() => {
+      // check for empty value
+      if(this.editedValue === ''){
+        this.errorMessage = 'You cannot leave an empty value!';
+        return;
+      }
       // only if the edited header has any number more than/equal 0 cause of index and not null
       if(this.editedHeader !== null && this.editedHeader >= 0){
         const header = this.dataTableHeaders[this.editedHeader];
         if(header){
           // check if the value has been changed
           const trimmedEditedValue = this.toCamelCase(this.editedValue);
-          const trimmedHeaderName = this.toCamelCase(header.name)
+          const trimmedHeaderName = this.toCamelCase(header.name);
+          console.log(this.editedValue)
           if (trimmedHeaderName === this.editedValue) {
             // No changes, exit early
             this.resetEditingState();
