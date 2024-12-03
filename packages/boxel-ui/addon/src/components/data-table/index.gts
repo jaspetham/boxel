@@ -10,6 +10,7 @@ import { and, eq } from '@cardstack/boxel-ui/helpers';
 export interface DataTableHeader {
   name: string
   value: string
+  width?: string
 };
 export interface DataTableCell {
   [key: string]: string
@@ -52,8 +53,6 @@ export default class DataTable extends Component<Signature> {
     cellInput: false
   };
   @tracked errorMessage: string | null = null;
-
-  @action
   validateData(): boolean {
     if (!Array.isArray(this.dataTableHeaders)) {
       this.errorMessage = 'Data Headers should be an array.';
@@ -78,6 +77,16 @@ export default class DataTable extends Component<Signature> {
         return false;
       }
     }
+    const headerNames = new Set<string>();
+    const headerValues = new Set<string>();
+    for (const header of this.dataTableHeaders) {
+      if (headerNames.has(header.name) || headerValues.has(header.value)) {
+        this.errorMessage = 'You cannot have duplicate headers (either name or value)!';
+        return false;
+      }
+      headerNames.add(header.name);
+      headerValues.add(header.value);
+    }
 
     this.errorMessage = null;
     return true;
@@ -87,14 +96,12 @@ export default class DataTable extends Component<Signature> {
     super(owner, args);
     if (!this.validateData()) console.error(this.errorMessage);
   }
-
   @action
   onCellClick(cellData: cellDataType): void {
     this.editInputMode = {
       headerInput: false,
       cellInput: true
     };
-
     this.editedCell = { cellIndex: cellData.cellIndex, headerIndex: cellData.headerIndex };
     this.editedValue = cellData.value;
   }
@@ -117,7 +124,23 @@ export default class DataTable extends Component<Signature> {
       this.cancelEdit();
     }
   }
+  // created a seperate function to reset editing state
+  private resetEditingState(): void {
+    this.editedHeader = null;
+    this.editedCell = null;
+    this.editedValue = '';
+  }
 
+  private toCamelCase(input: string): string {
+    return input
+      .trim()
+      .toLowerCase()
+      .split(' ')
+      .map((word, index) =>
+        index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
+      )
+      .join('');
+  }
   @action
   saveEditedValue(): void {
     next(() => {
@@ -125,38 +148,50 @@ export default class DataTable extends Component<Signature> {
       if(this.editedHeader !== null && this.editedHeader >= 0){
         const header = this.dataTableHeaders[this.editedHeader];
         if(header){
+          // check if the value has been changed
+          const trimmedEditedValue = this.toCamelCase(this.editedValue);
+          const trimmedHeaderName = this.toCamelCase(header.name)
+          if (trimmedHeaderName === this.editedValue) {
+            // No changes, exit early
+            this.resetEditingState();
+            return;
+          }
           // store old header value & name for later
           const oldHeaderValue = header.value;
-          const editedValueCamelCase = this.editedValue
-            .trim()
-            .toLowerCase()
-            .split(' ')
-            .map((word, index) =>
-              index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
-            )
-            .join('');
           // check if the new header name or camel case value is duplicated
-          const duplicateHeader = this.dataTableHeaders.some(
-            (header) => header.value === editedValueCamelCase || header.name === this.editedValue
-          );
-
+          const duplicateHeader = this.dataTableHeaders.some((currentHeader, index) => {
+            // ignore current header being edited from the duplicate check
+            if (index === this.editedHeader) {
+              return false;
+            }
+            const currentHeaderCamelCase = this.toCamelCase(currentHeader.name);
+            return (
+              currentHeaderCamelCase === trimmedEditedValue ||
+              currentHeader.value === trimmedEditedValue
+            );
+          })
           if (duplicateHeader) {
             this.errorMessage = 'You cannot have a duplicate Header!';
             return;
           }
+
           set(header, 'name', this.editedValue)
-          set(header, 'value', editedValueCamelCase)
+          set(header, 'value', trimmedEditedValue)
 
           // once new header value is updated with the new camel case
           // it is time to update our cell's key with the new header value
-          this.dataTableCells = this.dataTableCells.map((cell) => {
-            // do a temp copy then return with the new updated cell
-            const updatedCell = { ...cell };
-            // if updatedCell[oldHeaderValue] is either undefined null , return empty
-            updatedCell[editedValueCamelCase] = updatedCell[oldHeaderValue] ?? '';
-            delete updatedCell[oldHeaderValue];
-            return updatedCell;
-          });
+          if (trimmedEditedValue !== oldHeaderValue) {
+            this.dataTableCells = this.dataTableCells.map((cell) => {
+              // do a temp copy then return with the new updated cell
+              const updatedCell = { ...cell };
+              // if updatedCell[oldHeaderValue] is either undefined null , return empty
+              if (oldHeaderValue in updatedCell) {
+                updatedCell[trimmedEditedValue] = updatedCell[oldHeaderValue]  ?? '';
+                delete updatedCell[oldHeaderValue];
+              }
+              return updatedCell;
+            });
+          }
         }
       }
 
@@ -171,9 +206,8 @@ export default class DataTable extends Component<Signature> {
 
       this.dataTableHeaders = [...this.dataTableHeaders];
       this.dataTableCells = [...this.dataTableCells];
-      this.editedHeader = null;
-      this.editedCell = null;
-      this.editedValue = '';
+      // reset too
+      this.resetEditingState()
       if (!this.validateData()) console.error(this.errorMessage);
        this.args.onDataChange?.(this.dataTableHeaders, this.dataTableCells);
     })
@@ -198,6 +232,7 @@ export default class DataTable extends Component<Signature> {
     const input = event.target as HTMLInputElement;
     this.editedValue = input.value;
   }
+
   <template>
     <div class="data-table" ...attributes>
       {{#if this.errorMessage}}
@@ -211,6 +246,8 @@ export default class DataTable extends Component<Signature> {
             {{#each this.dataTableHeaders as |header headerIndex|}}
               <th
                 id={{concat 'header-' headerIndex}}
+                class={{if (and this.editInputMode.headerInput (eq headerIndex this.editedHeader)) "editing"}}
+                style={{if header.width (concat 'min-width:' header.width) 'min-width:200px'}}
                 data-value={{ header.value}}
                 {{on "click" (fn this.onHeaderClick (hash
                   id=(concat 'header-' headerIndex)
@@ -239,6 +276,7 @@ export default class DataTable extends Component<Signature> {
               {{#each this.dataTableHeaders as |header headerIndex|}}
                 <td
                   id={{concat 'header-' headerIndex '-cell-' cellIndex }}
+                  class={{if (and this.editInputMode.cellInput (eq cellIndex this.editedCell.cellIndex) (eq headerIndex this.editedCell.headerIndex)) "editing"}}
                   data-value={{get cell header.value}}
                   data-parent={{header.value}}
                   {{on "click" (fn this.onCellClick (hash
@@ -274,17 +312,23 @@ export default class DataTable extends Component<Signature> {
         margin-bottom: var(--boxel-sp-sm);
       }
       .data-table {
+        max-width:100%;
+        overflow:auto;
         width: 100%;
         border-collapse: collapse;
+        max-height: clamp(200px, 70dvh, 600px);
       }
       th, td {
         padding: var(--boxel-sp-sm) var(--boxel-sp);
         text-align: left;
         border: var(--boxel-border);
-      }
-      td {
         cursor: pointer;
-        transition: var(--boxel-transition);
+      }
+      .editing{
+        padding:0;
+      }
+      .editing:hover{
+        border-color:transparent;
       }
       td:hover {
         box-shadow: var(--boxel-box-shadow-hover);
@@ -292,8 +336,10 @@ export default class DataTable extends Component<Signature> {
         border-color: var(--boxel-dark);
       }
       input {
-        width: 100%;
-        padding: var(--boxel-sp-sm);
+        width:100%;
+        font-family:var(--boxel-font-family);
+        padding: var(--boxel-sp-sm) var(--boxel-sp);
+        border:1px solid var(--boxel-highlight);
       }
     </style>
   </template>

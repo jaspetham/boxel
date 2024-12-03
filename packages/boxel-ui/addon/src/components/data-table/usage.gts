@@ -8,15 +8,15 @@ export default class DataTableUsage extends Component {
   @tracked private tableDataHeaders:DataTableHeader[] =  [
     {
       "name": "First Name",
-      "value": "firstName"
+      "value": "firstName",
     },
     {
       "name": "Last Name",
-      "value": "lastName"
+      "value": "lastName",
     },
     {
       "name": "Email",
-      "value": "email"
+      "value": "email",
     }
   ]
   @tracked private tableDataCells:DataTableCell[] = [
